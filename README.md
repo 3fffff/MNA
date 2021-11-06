@@ -1,0 +1,2 @@
+# MNA
+Modified nodal analys
