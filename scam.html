@@ -1,0 +1,270 @@
+<html>
+
+<body>
+  <input id="primary-file-upload" type="file" multiple>
+  <div id="file-content">
+    Nothing uploaded yet
+  </div>
+  <script>
+    const mla = input => {
+      console.time()
+      const lines = input.split("\n")
+      let nodes = [], N1 = Array(), N2 = Array(), Vsources = 0
+      for (let i = 0; i < lines.length; i++) {
+        let sline = lines[i].split(" ")
+        sline[1] = parseInt(sline[1])
+        sline[2] = parseInt(sline[2])
+        N1.push(parseInt(sline[1]))
+        N2.push(parseInt(sline[2]))
+        if (sline[0][0] == "V" || sline[0][0] == "O" || sline[0][0] == "E" || sline[0][0] == "H") Vsources++
+        nodes.push(sline)
+      }
+      const maxN1 = Math.max.apply(null, N1)
+      const maxN2 = Math.max.apply(null, N2);
+      const maxNodes = Math.max(maxN1, maxN2)
+      console.log(maxNodes)
+      console.log(Vsources)
+      console.log(nodes)
+      let A = Array(maxNodes + Vsources), b = Array(maxNodes + Vsources), j = Array(maxNodes + Vsources), vsCnt = 0;
+      for (var i = 0; i < maxNodes + Vsources; i++) {
+        A[i] = Array(maxNodes + Vsources);
+        b[i] = 0
+        for (let k = 0; k < A[0].length; k++)
+          A[i][k] = 0
+      }
+      for (let i = 0; i < nodes.length; i++) {
+        const n1 = nodes[i][1] - 1, n2 = nodes[i][2] - 1
+        switch (nodes[i][0][0]) {
+          case "R": case "C": case "L":
+            let g = ""
+            switch (nodes[i][0][0]) {
+              case "R":
+                g = "1/" + nodes[i][0]
+                break
+              case "C":
+                g = "s*" + nodes[i][0]
+                break
+              case "L":
+                g = "1/s*" + nodes[i][0]
+                break
+            }
+            // Here we fill in A array by adding conductance.
+            // The procedure is slightly different if one of the nodes is
+            // ground, so check for thos accordingly.
+            if (n1 < 0)
+              A[n2][n2] += " - " + g;  // Add conductance.
+            else if (n2 < 0)
+              A[n1][n1] += " + " + g;  // Add conductance.
+            else {
+              A[n1][n1] += " + " + g;  // Add conductance.
+              A[n2][n2] += " + " + g;  // Add conductance.
+              A[n1][n2] += " - " + g;  // Sub conductance.
+              A[n2][n1] += " - " + g;  // Sub conductance.
+            }
+            break;
+          case "V":
+
+            if (n1 >= 0) {
+              A[n1][maxNodes + vsCnt] += " + 1";
+              A[maxNodes + vsCnt][n1] += " + 1";
+            }
+            if (n2 >= 0) {
+              A[n2][maxNodes + vsCnt] += " - 1";
+              A[maxNodes + vsCnt][n2] += " - 1";
+            }
+            b[maxNodes + vsCnt] = nodes[i][0];         // Add Name of source to RHS
+            j[maxNodes + vsCnt] = "I_" + nodes[i][0];  // Add current through source to unknowns
+            vsCnt = vsCnt + 1;
+            break;
+          case "I": // IXXXXXXX N1 N2 VALUE  (Current N1 to N2)
+            // Add current to nodes (if node is not ground)
+            if (n1 >= 0)
+              b[n1] += " - " + nodes[i][0]; // subtract current from n1
+            if (n2 >= 0)
+              b[n2] = " + " + nodes[i][0]; // add current to n2
+            break
+          // Op amp
+          case "O":  // 0XXXXXXX N1 N2 N3 VALUE  (N1=+, N2=-, N3=Vout)
+            const n3 = parseFloat(nodes[i][3]);  // This find n3
+            // Change B and C matrices as appropriate.
+            A[n3][maxNodes + vsCnt] += " + 1";
+            if (n1 >= 0) A[maxNodes + vsCnt][n1] += " + 1";
+            if (n2 >= 0) A[maxNodes + vsCnt][n2] += " - 1";
+            j[maxNodes + vsCnt] = "I_" + nodes[i][0];  // Add current through source to unknowns
+            vsCnt = vsCnt + 1;          // Keep track of number of voltage sources
+            break
+          // Voltage controlled voltage source
+          case "E":                        // VCVS
+
+            let nc1 = parseFloat(nodes[i][3]);  //  Control voltage, pos side
+            let nc2 = parseFloat(nodes[i][4]);  //  Control voltage, neg side
+
+            //  Change B and C matrices as appropriate for output nodes.
+            //   (if node is not ground)
+            if (n1 >= 0) {
+              A[n1][maxNodes + vsCnt] += " + 1";
+              A[maxNodes + vsCnt][n1] += " + 1";
+            }
+            if (n2 >= 0) {
+              A[n2][maxNodes + vsCnt] += " - 1";
+              A[maxNodes + vsCnt][n2] += " - 1";
+            }
+
+            //  Change C matrix as appropriate for input nodes
+            //  (if node is not ground)
+            if (nc1 >= 0) A[maxNodes + vsCnt][nc1] += " - " + nodes[i][0];
+            if (nc2 >= 0) A[maxNodes + vsCnt][nc2] += " + " + nodes[i][0];
+
+            j[vsCnt] = "I_" + nodes[i][0]; //  Add current through source to unknowns
+            vsCnt = vsCnt + 1;           // Keep track of number of voltage sources
+            break
+          //  Voltage controlled current source
+          case "A":    //  VCCS GXXXXXXX N+ N- NC+ NC- VALUE
+            nc1 = parseFloat(nodes[i][3]);  //  Control voltage, pos side
+            nc2 = parseFloat(nodes[i][4]);  //  Control voltage, neg side
+            g = nodes[i][0]
+
+            //  Create a string that shows if each node is ~= zero
+            //  (i.e., we find which nodes are grounded).
+            const myString = n1 + "" + n2 + "" + nc1 + "" + nc2 + "";
+            //  Checking all different conditions gets complicated.  There
+            //  may be a simpler way, but here we just brute force it and
+            //  check all 16 possible.
+            switch (myString) {
+              case "0000": case "0011": case "0001": case "0010":
+              case "0100": case "1000": case "1100":
+                console.log("error in VCCS"); //  This should never happen
+                break;
+              case "1111":  //  All nodes are non-zero
+                A[n1][nc1] += " + " + g;
+                A[n1][nc2] += " - " + g;
+                A[n2][nc1] += " - " + g;
+                A[n2][nc2] += " + " + g;
+                break;
+              case "0111":  //  n1 is zero - so don"t include
+                A[n2][nc1] += " - " + g;
+                A[n2][nc2] += " + " + g;
+                break;
+              case "0101":
+                A[n2][nc2] += " + " + g;
+                break;
+              case "0110":
+                A[n2][nc1] += " - " + g;
+                break;
+              case "1011":
+                A[n1][nc1] += " + " + g;
+                A[n1][nc2] += " - " + g;
+                break;
+              case "1001":
+                A[n1][nc2] += " - " + g;
+                break;
+              case "1010":
+                A[n1][nc1] += " + " + g;
+                break;
+              case "1101":
+                A[n1][nc2] += " - " + g;
+                A[n2][nc2] += " + " + g;
+                break;
+              case "1110":
+                A[n1][nc1] += " + " + g;
+                A[n2][nc1] += " - " + g;
+                break;
+            }
+            break
+
+          //  Current controlled current source.
+          //  For the CCCS we need the controlling current, which is
+          //  defined as the current through one of the voltage sources.
+          //  Since this voltage may not have been defined yet (i.e., it
+          //  comes later in the circuit definition file), we leave this
+          //  part of the matrix generation for later.
+          //  For the CCCS there is nothing to add at this point.
+          //  Current controlled voltage source
+          //  For the CCVS we need the controlling current which is defined as the
+          //  current through one of the voltage sources.  Since this voltage may not
+          //  have been defined yet (i.e., it comes later in the circuit definition
+          //  file), we leave this part of the matrix generation for later.
+          case "H":    //  CCVS
+
+            //  Change B and C as appropriate (if node is not ground)
+            if (n1 >= 0) {
+              A[n1][maxNodes + vsCnt] += " + 1";
+              A[maxNodes + vsCnt][n1] += "+ 1";
+            }
+            if (n2 >= 0) {
+              A[n2][maxNodes + vsCnt] = " - 1";
+              A[maxNodes + vsCnt][n2] = " - 1";
+            }
+            j[maxNodes + vsCnt] = "I_" + nodes[i][0]; //  Add current through source to unknowns
+            vsCnt = vsCnt + 1; //  Keep track of number of voltage sources
+        }
+      }
+      for (let i = 0; i < nodes.length; i++) {
+        const n1 = nodes[i][1] - 1, n2 = nodes[i][2] - 1
+        const cv = nodes[i][3];  // Name of controlling voltages
+        const cvInd = j.findIndex(o => o === 'I_' + cv);  // Index of controlling voltage.
+        switch (nodes[i][0][0]) {
+          case 'H':
+            // Here we find the indices in the matrix j:
+            //    of the controlling voltage (cvInd)
+            //    as well as the index of this element (hInd)
+            const hInd = j.findIndex(o => o === 'I_' + nodes[i][0]); // Index of CCVS (this element)
+            A[hInd][maxNodes + cvInd] = '-' + nodes[i][0];  // Set the value of the D matrix.
+            break
+          case 'F':
+            // Here we find the index in the matrix j of the controlling
+            // voltage (cvInd)
+            // Set the B matrix accordingly.
+            if (n1 >= 0)
+              A[n1][maxNodes + cvInd] += ' + ' + nodes[i][0];
+            if (n2 >= 0)
+              A[n2][maxNodes + cvInd] += ' - ' + nodes[i][0];
+        }
+      }
+      console.log(A)
+      console.log(b)
+      const elem = document.createElement('div')
+      let strTab=""
+      for (let i = 0; i < A.length; i++) {
+        let strCol=""
+        for(let j=0;j<A[i].length;j++)
+          strCol += "<td>"+A[i][j]+"</td>"
+        strTab += "<tr>"+strCol + '<td> = </td>' + "<td>"+b[i]+"</td></tr>"
+      }
+      elem.innerHTML = "<table><tbody>"+strTab+"</tbody></table>"
+      document.body.append(elem)
+      console.timeEnd()
+    }
+    const readUploadedFileAsText = inputFile => {
+      const temporaryFileReader = new FileReader();
+      temporaryFileReader.onloadstart = function (e) {
+        //document.getElementById("progress_bar").className = "loading";
+      };
+      return new Promise((resolve, reject) => {
+        temporaryFileReader.onerror = () => {
+          temporaryFileReader.abort();
+          reject(new DOMException("Problem parsing input file."));
+        };
+        temporaryFileReader.onload = () => {
+          resolve(temporaryFileReader.result);
+        };
+        temporaryFileReader.readAsText(inputFile);
+      });
+    };
+    const handleUploadFile = async event => {
+      const file = event.target.files[0];
+      const fileContentDiv = document.querySelector("div#file-content");
+      try {
+        const fileContents = await readUploadedFileAsText(file);
+        mla(fileContents)
+      } catch (e) {
+        console.log(e)
+        fileContentDiv.innerHTML = e.message;
+      }
+    };
+    document.querySelector("input#primary-file-upload").addEventListener("change", handleUploadFile);
+  </script>
+
+</body>
+
+</html>
